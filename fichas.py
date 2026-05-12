@@ -1,6 +1,7 @@
 import csv
 import os
 import re
+import unicodedata
 from docx import Document
 from docx.shared import Pt, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -10,6 +11,31 @@ from docx.oxml import OxmlElement
 
 CSV_FILE = 'FICHA DE INSCRIÇÃO - V EJC NAZARÉ (respostas) - Página3.csv'
 OUTPUT_DIR = 'Fichas de Inscrição'
+
+# ── Helpers de matching ───────────────────────────────────────────────────────
+
+def _norm(s):
+    """Normaliza string: minúsculas, NFKD, remove diacríticos e ordinais."""
+    s = unicodedata.normalize('NFKD', s.lower().strip())
+    return ''.join(c for c in s if not unicodedata.combining(c))
+
+def _is_selected(opt, selected):
+    """Verifica se a opção está selecionada com matching exato por token.
+    Opções de uma palavra usam token exato (evita PP marcar P, GG marcar G).
+    Opções multi-palavra usam busca por substring normalizada.
+    """
+    if not selected:
+        return False
+    opt_norm = _norm(opt)
+    sel_norm = _norm(selected)
+    if ' ' in opt_norm:
+        # "Baby Look", "1ª Eucaristia", "Mora junto" etc: substring
+        return opt_norm in sel_norm
+    else:
+        # "PP", "P", "G", "GG", "M" etc: token exato
+        tokens = set(re.split(r'[;,\s\-]+', sel_norm))
+        tokens.discard('')
+        return opt_norm in tokens
 
 # ── Helpers de formatação ──────────────────────────────────────────────────────
 
@@ -65,10 +91,8 @@ def checkboxes(cell, options, selected, size=10):
     p.alignment = WD_ALIGN_PARAGRAPH.LEFT
     cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
-    selected_lower = [s.strip().lower() for s in (selected or '').split(';')]
-
     for i, opt in enumerate(options):
-        marked = any(opt.lower() in s or s in opt.lower() for s in selected_lower if s)
+        marked = _is_selected(opt, selected)
         prefix = '[X] ' if marked else '[  ] '
         run = p.add_run(prefix + opt)
         run.font.size = Pt(size)
@@ -319,9 +343,18 @@ def generate_ficha(data: dict, output_path: str):
     c[0].merge(c[1]); label(c[0], 'TAMANHO DA CAMISA:')
     c[2].merge(c[3]); label(c[2], 'INSTAGRAM:')
     c[4].merge(c[5]); label(c[4], 'OBSERVAÇÕES:')
-    c = row(0.65)
+    c = row(1.1)
     c[0].merge(c[1])
     checkboxes(c[0], ['PP', 'P', 'M', 'G', 'GG'], data['camisa'], size=10)
+    p_modelo = c[0].add_paragraph()
+    p_modelo.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    for i, opt in enumerate(['Normal', 'Baby Look']):
+        marked = _is_selected(opt, data['camisa'])
+        run = p_modelo.add_run(('[X] ' if marked else '[  ] ') + opt)
+        run.font.size = Pt(10)
+        run.bold = marked
+        if i == 0:
+            p_modelo.add_run('   ').font.size = Pt(10)
     c[2].merge(c[3]); value(c[2], data['instagram'])
     c[4].merge(c[5]); value(c[4], data['obs'])
 
